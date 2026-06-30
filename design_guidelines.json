@@ -1,0 +1,102 @@
+{
+  "theme": "light",
+  "archetype": "Archetype 4 (Swiss & High-Contrast)",
+  "vibe": "Sobre et professionnel, authoritative, clean, data-first.",
+  "typography": {
+    "fonts": {
+      "headings": "Outfit",
+      "body": "IBM Plex Sans"
+    },
+    "rules": {
+      "h1": "text-3xl sm:text-4xl tracking-tight font-semibold text-zinc-900",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-medium text-zinc-900",
+      "h3": "text-xl sm:text-2xl tracking-tight font-medium text-zinc-800",
+      "body": "text-sm sm:text-base leading-relaxed text-zinc-700",
+      "labels_and_overlines": "text-xs uppercase tracking-[0.15em] font-semibold text-zinc-500",
+      "general": "Never use Inter or Roboto for headings. Headings must have tight tracking. Body text needs high legibility for data density."
+    }
+  },
+  "color_palette": {
+    "background": {
+      "primary": "#FFFFFF",
+      "secondary": "#F4F4F5",
+      "tertiary": "#E4E4E7"
+    },
+    "text": {
+      "primary": "#09090B",
+      "secondary": "#52525B",
+      "tertiary": "#71717A"
+    },
+    "brand": {
+      "primary": "#002FA7",
+      "primary_hover": "#00227A",
+      "accent": "#09090B"
+    },
+    "status": {
+      "success": "#166534",
+      "success_bg": "#F0FDF4",
+      "warning": "#B45309",
+      "warning_bg": "#FFFBEB",
+      "error": "#DC2626",
+      "error_bg": "#FEF2F2"
+    },
+    "rules": "Strict adherence to monochrome base with functional color. The UI should be 95% achromatic. Brand blue (#002FA7) is reserved for primary actions (CTAs). Status colors are for grades, alerts, and payment success/failure only."
+  },
+  "layout_and_spacing": {
+    "grid_system": "The Control Room Grid",
+    "spacing_scale": "Tailwind standard, but highly structured. p-6 for inner card padding, gap-4 or gap-6 for dashboard widget spacing.",
+    "dashboard_layout": "F-Pattern layout. Vertical collapsible left sidebar for navigation. Top-left quadrant reserved for primary metrics or upcoming immediate schedule.",
+    "borders_and_radii": "Sharp and rigid. Use rounded-none or max rounded-md (6px). Surfaces rely on 1px crisp borders (border-zinc-200) rather than heavy drop shadows.",
+    "rules": "No full-screen gradients. Data density is high but progressive disclosure is used (hide complex settings behind tabs). Always left-align dense content and forms."
+  },
+  "components": {
+    "surfaces": "Use 'Grid Borders' style. Flat backgrounds, 1px subtle border, no ambient shadows. On hover for interactive cards, use slight lift (-translate-y-1) and shadow-sm.",
+    "buttons": "Primary: bg-[#002FA7] text-white hover:bg-[#00227A]. Secondary: bg-white border border-zinc-200 text-zinc-900 hover:bg-zinc-50.",
+    "navigation": "Vertical left sidebar with active states highlighted by a subtle left border or background tint (bg-zinc-100 text-zinc-900).",
+    "data_display": "Shadcn UI Tables for grades. Recharts for grade evolution. Custom CSS Grid for Timetable/Schedule.",
+    "forms": "Shadcn UI inputs. Left-aligned labels. Use clear, high-contrast focus states (focus:ring-2 focus:ring-[#002FA7])."
+  },
+  "images": [
+    {
+      "category": "hero_login",
+      "url": "https://images.unsplash.com/photo-1687530449872-5393d814f8de",
+      "description": "Minimal architecture. Use as a split-screen background for the Login/Register page."
+    },
+    {
+      "category": "library_placeholder_1",
+      "url": "https://images.pexels.com/photos/8581043/pexels-photo-8581043.jpeg",
+      "description": "Minimalist book arrangement. Use as placeholder cover for library books."
+    },
+    {
+      "category": "library_placeholder_2",
+      "url": "https://images.pexels.com/photos/683929/pexels-photo-683929.jpeg",
+      "description": "Clean bookshelf view. Use as secondary placeholder cover for library."
+    }
+  ],
+  "motion": {
+    "transitions": "Fast and purposeful. 150ms ease-in-out for hovers.",
+    "interactions": "Use subtle micro-interactions on table rows and schedule blocks (e.g., hover:bg-zinc-50)."
+  },
+  "icons": {
+    "library": "lucide-react",
+    "style": "Clean, consistent stroke width (2px). Use for sidebar navigation and quick actions."
+  },
+  "accessibility_and_testing": {
+    "testing_rules": "ALL interactive elements (buttons, links, form inputs, tabs) and key informational elements MUST have a data-testid attribute in kebab-case representing their role. Example: data-testid='login-submit-button', data-testid='nav-grades-link'.",
+    "contrast": "Ensure all text meets APCA/WCAG AA contrast ratios against backgrounds. Focus rings are mandatory for keyboard navigation."
+  },
+  "instructions_to_main_agent": [
+    "You are building a French SaaS application for schools/universities. All UI text must be in French.",
+    "Build a Left Sidebar layout with these sections: Tableau de bord, Notes, Emploi du temps, Paiements, Bibliothèque, Messagerie, Notifications.",
+    "Ensure multi-role support context (Student, Teacher, Admin). Provide a mocked toggle or distinct views.",
+    "Grades (Notes): Display data in Shadcn Tables. Include a Recharts line chart showing average evolution.",
+    "Timetable (Emploi du temps): Use a CSS Grid layout to simulate a weekly calendar.",
+    "Payments (Paiements): Mock a Stripe payment interface with clear status badges (Payé, En attente).",
+    "Library (Bibliothèque): Show a catalog of books using the provided image URLs as covers.",
+    "Messaging (Messagerie): Build a split-pane layout (sidebar for contacts, main area for chat).",
+    "Strictly follow the color palette: use white/gray for structure and #002FA7 solely for primary actions.",
+    "Use Shadcn UI components extensively (Cards, Tables, Tabs, Dialogs, Forms) but ensure border-radius is overridden to rounded-md or rounded-none to match the Swiss design archetype.",
+    "Install and apply 'Outfit' for headings and 'IBM Plex Sans' for body text via Google Fonts.",
+    "Add 'data-testid' to every interactive element without exception."
+  ]
+}
