@@ -31,8 +31,9 @@ export default function Payments() {
         return;
       }
       setTimeout(() => pollStatus(sessionId, attempts + 1), 2000);
-    } catch (e) {
+    } catch (error) {
       setChecking(false);
+      console.error("Failed to verify payment", error);
       toast.error("Erreur de vérification.");
     }
   }, []);
@@ -74,14 +75,22 @@ export default function Payments() {
         </div>
       )}
 
-      <div className="bg-white border border-zinc-200 rounded-md p-6 mt-8 max-w-md">
-        <span className="text-xs uppercase tracking-[0.15em] font-semibold text-zinc-500">Solde à régler</span>
-        <p className="font-heading text-4xl font-semibold tracking-tight text-zinc-900 mt-2" data-testid="pending-total">{total.toFixed(2)} €</p>
+      <div className="mt-8 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+        <div className="bg-white border border-zinc-200 rounded-xl p-6 shadow-sm">
+          <span className="text-xs uppercase tracking-[0.15em] font-semibold text-zinc-500">Solde à régler</span>
+          <p className="font-heading text-4xl font-semibold tracking-tight text-zinc-900 mt-2" data-testid="pending-total">{total.toFixed(2)} €</p>
+          <p className="text-sm text-zinc-500 mt-2">Montant total restant à payer pour cette période.</p>
+        </div>
+        <div className="bg-[#002FA7] rounded-xl p-6 text-white shadow-sm">
+          <p className="text-sm uppercase tracking-[0.2em] text-blue-100">État du compte</p>
+          <p className="mt-3 text-2xl font-semibold">{fees.filter((f) => f.status === "paid").length} / {fees.length} frais réglés</p>
+          <p className="mt-2 text-sm text-blue-100">Paiement rapide et sécurisé via la plateforme.</p>
+        </div>
       </div>
 
       <div className="space-y-3 mt-8">
         {fees.map((f) => (
-          <div key={f.id} className="bg-white border border-zinc-200 rounded-md p-5 flex items-center justify-between gap-4 flex-wrap" data-testid="fee-item">
+          <div key={f.id} className="bg-white border border-zinc-200 rounded-xl p-5 flex items-center justify-between gap-4 flex-wrap shadow-sm" data-testid="fee-item">
             <div>
               <p className="font-medium text-zinc-900">{f.label}</p>
               <p className="text-sm text-zinc-500 mt-0.5">Échéance : {f.due_date}</p>
@@ -89,12 +98,12 @@ export default function Payments() {
             <div className="flex items-center gap-4">
               <span className="font-heading text-lg font-semibold text-zinc-900">{f.amount.toFixed(2)} €</span>
               {f.status === "paid" ? (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium text-green-700 bg-green-50" data-testid="fee-paid-badge">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium text-green-700 bg-green-50" data-testid="fee-paid-badge">
                   <CheckCircle2 className="w-4 h-4" /> Payé
                 </span>
               ) : (
                 <>
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium text-amber-700 bg-amber-50">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium text-amber-700 bg-amber-50">
                     <Clock className="w-4 h-4" /> En attente
                   </span>
                   <Button onClick={() => pay(f.id)} disabled={paying === f.id} className="bg-[#002FA7] hover:bg-[#00227A] rounded-md" data-testid={`pay-button-${f.id}`}>

@@ -1,3 +1,4 @@
+import PropTypes from "prop-types";
 import { useState, useEffect } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
@@ -12,6 +13,7 @@ const NAV = [
   { to: "/notes", label: "Notes", icon: GraduationCap, testid: "nav-grades" },
   { to: "/emploi-du-temps", label: "Emploi du temps", icon: CalendarDays, testid: "nav-timetable" },
   { to: "/paiements", label: "Paiements", icon: CreditCard, testid: "nav-payments" },
+  { to: "/cours", label: "Cours", icon: BookOpen, testid: "nav-courses" },
   { to: "/bibliotheque", label: "Bibliothèque", icon: BookOpen, testid: "nav-library" },
   { to: "/messagerie", label: "Messagerie", icon: MessagesSquare, testid: "nav-messaging" },
   { to: "/notifications", label: "Notifications", icon: Bell, testid: "nav-notifications" },
@@ -97,7 +99,14 @@ export default function Layout({ children }) {
         </div>
       </aside>
 
-      {open && <div className="fixed inset-0 bg-black/20 z-30 lg:hidden" onClick={() => setOpen(false)} />}
+      {open && (
+        <button
+          type="button"
+          className="fixed inset-0 bg-black/20 z-30 lg:hidden"
+          onClick={() => setOpen(false)}
+          aria-label="Fermer le menu"
+        />
+      )}
 
       {/* Main */}
       <div className="flex-1 flex flex-col min-w-0">
@@ -112,3 +121,7 @@ export default function Layout({ children }) {
     </div>
   );
 }
+
+Layout.propTypes = {
+  children: PropTypes.node,
+};

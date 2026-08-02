@@ -1,9 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,6 +15,57 @@ function gradeColor(s, max) {
   if (v >= 14) return "text-green-700 bg-green-50";
   if (v >= 10) return "text-amber-700 bg-amber-50";
   return "text-red-600 bg-red-50";
+}
+
+function TrendChart({ data }) {
+  const width = 640;
+  const height = 220;
+  const paddingX = 28;
+  const paddingY = 18;
+  const minY = 0;
+  const maxY = 20;
+
+  const coords = data.map((point, index) => {
+    const x = paddingX + (index * (width - paddingX * 2)) / Math.max(data.length - 1, 1);
+    const y = height - paddingY - ((point.note - minY) / (maxY - minY)) * (height - paddingY * 2);
+    return `${x},${y}`;
+  });
+
+  return (
+    <div className="w-full overflow-x-auto">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-[240px]">
+        {[0, 5, 10, 15, 20].map((tick) => {
+          const y = height - paddingY - ((tick - minY) / (maxY - minY)) * (height - paddingY * 2);
+          return (
+            <g key={tick}>
+              <line x1={paddingX} y1={y} x2={width - paddingX} y2={y} stroke="#E4E4E7" strokeDasharray="3 3" />
+              <text x={8} y={y + 4} fontSize="11" fill="#71717A">{tick}</text>
+            </g>
+          );
+        })}
+
+        <polyline
+          fill="none"
+          stroke="#002FA7"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          points={coords.join(" ")}
+        />
+
+        {data.map((point, index) => {
+          const x = paddingX + (index * (width - paddingX * 2)) / Math.max(data.length - 1, 1);
+          const y = height - paddingY - ((point.note - minY) / (maxY - minY)) * (height - paddingY * 2);
+          return (
+            <g key={`${point.name}-${index}`}>
+              <circle cx={x} cy={y} r="4" fill="#002FA7" />
+              <text x={x} y={height - 4} textAnchor="middle" fontSize="10" fill="#71717A">{point.name}</text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
 }
 
 export default function Grades() {
@@ -40,13 +88,14 @@ export default function Grades() {
     try {
       await api.post("/grades", {
         student_id: form.student_id, course: form.course, title: form.title,
-        score: parseFloat(form.score), max_score: 20, coefficient: parseFloat(form.coefficient),
+        score: Number.parseFloat(form.score), max_score: 20, coefficient: Number.parseFloat(form.coefficient),
       });
       toast.success("Note ajoutée");
       setOpen(false);
       setForm({ student_id: "", course: "", title: "", score: "", coefficient: "1" });
       load();
-    } catch (e) {
+    } catch (error) {
+      console.error("Failed to add grade", error);
       toast.error("Erreur lors de l'ajout");
     }
   };
@@ -61,6 +110,10 @@ export default function Grades() {
         <div>
           <p className="text-xs uppercase tracking-[0.15em] font-semibold text-zinc-500">Académique</p>
           <h1 className="font-heading text-3xl sm:text-4xl font-semibold tracking-tight text-zinc-900 mt-1">Notes</h1>
+          <div className="mt-3 flex flex-wrap gap-2 text-sm">
+            <span className="rounded-full bg-[#002FA7]/10 px-3 py-1 text-[#002FA7] font-medium">Filière : Informatique</span>
+            <span className="rounded-full bg-zinc-100 px-3 py-1 text-zinc-700 font-medium">Année : Année 1</span>
+          </div>
         </div>
         {isTeacher && (
           <Dialog open={open} onOpenChange={setOpen}>
@@ -97,22 +150,14 @@ export default function Grades() {
       {!isTeacher && chartData.length > 0 && (
         <div className="bg-white border border-zinc-200 rounded-md p-6 mt-8">
           <h3 className="font-heading text-lg font-medium text-zinc-800 mb-4">Évolution des résultats</h3>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={chartData} margin={{ left: -20 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#E4E4E7" />
-              <XAxis dataKey="name" tick={{ fontSize: 11, fill: "#71717A" }} />
-              <YAxis domain={[0, 20]} tick={{ fontSize: 11, fill: "#71717A" }} />
-              <Tooltip />
-              <Line type="monotone" dataKey="note" stroke="#002FA7" strokeWidth={2} dot={{ r: 3 }} />
-            </LineChart>
-          </ResponsiveContainer>
+          <TrendChart data={chartData} />
         </div>
       )}
 
-      <div className="bg-white border border-zinc-200 rounded-md mt-6 overflow-hidden">
+      <div className="bg-white border border-zinc-200 rounded-xl mt-6 overflow-hidden shadow-sm">
         <table className="w-full text-sm" data-testid="grades-table">
           <thead>
-            <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-[0.15em] text-zinc-500">
+            <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-[0.15em] text-zinc-500 bg-zinc-50">
               <th className="px-6 py-3 font-semibold">Matière</th>
               <th className="px-6 py-3 font-semibold">Évaluation</th>
               <th className="px-6 py-3 font-semibold">Coef.</th>
@@ -129,7 +174,7 @@ export default function Grades() {
                 <td className="px-6 py-4 text-zinc-600">{g.title}</td>
                 <td className="px-6 py-4 text-zinc-600">{g.coefficient}</td>
                 <td className="px-6 py-4 text-right">
-                  <span className={`inline-block px-2.5 py-1 rounded text-sm font-semibold ${gradeColor(g.score, g.max_score)}`}>
+                  <span className={`inline-flex items-center justify-center min-w-[72px] px-2.5 py-1 rounded-full text-sm font-semibold ${gradeColor(g.score, g.max_score)}`}>
                     {g.score}/{g.max_score}
                   </span>
                 </td>

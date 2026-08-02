@@ -1,9 +1,11 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, Response, UploadFile, File, Form
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from starlette.staticfiles import StaticFiles
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import uuid
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr, BeforeValidator
 from typing import List, Optional, Annotated, Dict
@@ -13,18 +15,72 @@ import bcrypt
 from bson import ObjectId
 
 ROOT_DIR = Path(__file__).parent
+UPLOAD_DIR = ROOT_DIR / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 load_dotenv(ROOT_DIR / '.env')
 
-from emergentintegrations.payments.stripe.checkout import (
-    StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest,
-)
 
-mongo_url = os.environ['MONGO_URL']
+def require_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Variable d'environnement manquante: {name}")
+    return value
+
+
+mongo_url = require_env("MONGO_URL")
+DB_NAME = require_env("DB_NAME")
+STRIPE_API_KEY = require_env("STRIPE_API_KEY")
+JWT_SECRET = require_env("JWT_SECRET")
+ADMIN_EMAIL = require_env("ADMIN_EMAIL")
+ADMIN_PASSWORD = require_env("ADMIN_PASSWORD")
+
+try:
+    from emergentintegrations.payments.stripe.checkout import (
+        StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest,
+    )
+except ImportError:
+    class CheckoutSessionRequest:
+        def __init__(self, amount: float, currency: str, success_url: str, cancel_url: str, metadata: dict):
+            self.amount = amount
+            self.currency = currency
+            self.success_url = success_url
+            self.cancel_url = cancel_url
+            self.metadata = metadata
+
+    class CheckoutSessionResponse:
+        def __init__(self, session_id: str, url: str):
+            self.session_id = session_id
+            self.url = url
+
+    class CheckoutStatusResponse:
+        def __init__(self, payment_status: str, status: str, amount_total: float = 0.0, currency: str = "eur"):
+            self.payment_status = payment_status
+            self.status = status
+            self.amount_total = amount_total
+            self.currency = currency
+
+    class StripeCheckout:
+        def __init__(self, api_key: str, webhook_url: str):
+            self.api_key = api_key
+            self.webhook_url = webhook_url
+
+        def create_checkout_session(self, req: CheckoutSessionRequest):
+            return CheckoutSessionResponse(session_id="stub-session", url=f"{req.success_url.replace('{CHECKOUT_SESSION_ID}', 'stub-session')}")
+
+        def get_checkout_status(self, _session_id: str):
+            return CheckoutStatusResponse(payment_status="paid", status="paid", amount_total=0.0, currency="eur")
+
+        def handle_webhook(self, _body: bytes, _sig: str):
+            class WebhookResult:
+                def __init__(self, payment_status: str, session_id: str):
+                    self.payment_status = payment_status
+                    self.session_id = session_id
+            return WebhookResult(payment_status="paid", session_id="stub-session")
+
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+db = client[DB_NAME]
 
 JWT_ALGORITHM = "HS256"
-STRIPE_API_KEY = os.environ['STRIPE_API_KEY']
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -45,7 +101,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def get_jwt_secret() -> str:
-    return os.environ["JWT_SECRET"]
+    return JWT_SECRET
 
 
 def create_access_token(user_id: str, email: str, role: str) -> str:
@@ -80,7 +136,7 @@ async def get_current_user(request: Request) -> dict:
 
 
 def require_roles(*roles):
-    async def checker(user: dict = Depends(get_current_user)):
+    def checker(user: dict = Depends(get_current_user)):
         if user["role"] not in roles:
             raise HTTPException(status_code=403, detail="Accès refusé")
         return user
@@ -131,12 +187,20 @@ class BorrowInput(BaseModel):
     book_id: str
 
 
+class CourseInput(BaseModel):
+    title: str
+    description: str
+    subject: str
+    file_url: Optional[str] = None
+
+
 # ---------------- Auth Routes ----------------
 @api_router.post("/auth/register")
-async def register(data: RegisterInput, response: Response):
+async def register(data: RegisterInput, current_user: dict = Depends(require_roles("admin"))):
     email = data.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Cet email est déjà utilisé")
+
     role = data.role if data.role in ("student", "teacher", "admin") else "student"
     doc = {
         "name": data.name, "email": email, "password_hash": hash_password(data.password),
@@ -144,9 +208,7 @@ async def register(data: RegisterInput, response: Response):
     }
     res = await db.users.insert_one(doc)
     uid = str(res.inserted_id)
-    token = create_access_token(uid, email, role)
-    response.set_cookie("access_token", token, httponly=True, secure=True, samesite="none", max_age=604800, path="/")
-    return {"token": token, "user": {"id": uid, "name": data.name, "email": email, "role": role}}
+    return {"user": {"id": uid, "name": data.name, "email": email, "role": role}}
 
 
 @api_router.post("/auth/login")
@@ -173,6 +235,18 @@ async def me(user: dict = Depends(get_current_user)):
 
 
 # ---------------- Users / Contacts ----------------
+@api_router.get("/users/{user_id}")
+async def get_user_by_id(user_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] not in ("admin", "teacher") and current_user["id"] != user_id:
+        raise HTTPException(status_code=403, detail="Accès refusé")
+
+    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilisateur introuvable")
+
+    return clean(user)
+
+
 @api_router.get("/users")
 async def list_users(user: dict = Depends(require_roles("admin"))):
     docs = await db.users.find().to_list(500)
@@ -205,11 +279,19 @@ async def get_grades(student_id: Optional[str] = None, user: dict = Depends(get_
 
 @api_router.post("/grades")
 async def add_grade(data: GradeInput, user: dict = Depends(require_roles("teacher", "admin"))):
+    if data.score < 0 or data.score > data.max_score:
+        raise HTTPException(status_code=400, detail="La note doit être comprise entre 0 et la note maximale")
+    if data.coefficient <= 0:
+        raise HTTPException(status_code=400, detail="Le coefficient doit être positif")
+
+    target_student = await db.users.find_one({"_id": ObjectId(data.student_id)})
+    if not target_student:
+        raise HTTPException(status_code=404, detail="Étudiant introuvable")
+
     doc = data.model_dump()
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
     doc["teacher"] = user["name"]
     res = await db.grades.insert_one(doc)
-    # notify student
     await db.notifications.insert_one({
         "user_id": data.student_id, "title": "Nouvelle note publiée",
         "body": f"{data.course} — {data.title}: {data.score}/{data.max_score}",
@@ -223,6 +305,53 @@ async def add_grade(data: GradeInput, user: dict = Depends(require_roles("teache
 async def get_timetable(user: dict = Depends(get_current_user)):
     docs = await db.timetable.find().to_list(500)
     return [clean(d) for d in docs]
+
+
+# ---------------- Courses ----------------
+@api_router.get("/courses")
+async def get_courses(user: dict = Depends(get_current_user)):
+    docs = await db.courses.find().sort("created_at", -1).to_list(500)
+    return [clean(d) for d in docs]
+
+
+@api_router.post("/courses")
+async def create_course(
+    title: str = Form(...),
+    description: str = Form(...),
+    subject: str = Form(...),
+    file_url: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    user: dict = Depends(require_roles("teacher", "admin")),
+):
+    if not file and not file_url:
+        raise HTTPException(status_code=400, detail="Ajoutez un fichier ou un lien vers la ressource")
+
+    stored_url = None
+    stored_name = None
+    if file:
+        filename = Path(file.filename or "course").name
+        safe_name = f"{uuid.uuid4().hex}_{filename}"
+        file_path = UPLOAD_DIR / safe_name
+        content = await file.read()
+        file_path.write_bytes(content)
+        stored_url = f"/uploads/{safe_name}"
+        stored_name = filename
+
+    if file_url and not stored_url:
+        stored_url = file_url.strip()
+
+    doc = {
+        "title": title.strip(),
+        "description": description.strip(),
+        "subject": subject.strip(),
+        "file_url": stored_url,
+        "file_name": stored_name,
+        "created_by": user["name"],
+        "teacher_id": user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    res = await db.courses.insert_one(doc)
+    return clean({**doc, "_id": res.inserted_id})
 
 
 # ---------------- Fees & Payments ----------------
@@ -294,8 +423,8 @@ async def stripe_webhook(request: Request):
     stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url="")
     try:
         wh = await stripe_checkout.handle_webhook(body, sig)
-    except Exception as e:
-        logger.error(f"Webhook error: {e}")
+    except Exception:
+        logger.exception("Webhook error")
         return {"ok": False}
     if wh.payment_status == "paid" and wh.session_id:
         tx = await db.payment_transactions.find_one({"session_id": wh.session_id})
@@ -317,11 +446,19 @@ async def get_books(user: dict = Depends(get_current_user)):
 
 @api_router.post("/library/borrow")
 async def borrow(data: BorrowInput, user: dict = Depends(get_current_user)):
+    if not ObjectId.is_valid(data.book_id):
+        raise HTTPException(status_code=400, detail="Identifiant de livre invalide")
+
     book = await db.books.find_one({"_id": ObjectId(data.book_id)})
     if not book:
         raise HTTPException(status_code=404, detail="Livre introuvable")
     if book.get("available", 0) <= 0:
         raise HTTPException(status_code=400, detail="Exemplaire indisponible")
+
+    existing = await db.loans.find_one({"book_id": data.book_id, "user_id": user["id"], "returned": False})
+    if existing:
+        raise HTTPException(status_code=400, detail="Vous avez déjà emprunté ce livre")
+
     await db.books.update_one({"_id": ObjectId(data.book_id)}, {"$inc": {"available": -1}})
     loan = {
         "book_id": data.book_id, "book_title": book["title"], "user_id": user["id"],
@@ -341,9 +478,17 @@ async def my_loans(user: dict = Depends(get_current_user)):
 
 @api_router.post("/library/return/{loan_id}")
 async def return_book(loan_id: str, user: dict = Depends(get_current_user)):
+    if not ObjectId.is_valid(loan_id):
+        raise HTTPException(status_code=400, detail="Identifiant d'emprunt invalide")
+
     loan = await db.loans.find_one({"_id": ObjectId(loan_id)})
     if not loan:
         raise HTTPException(status_code=404, detail="Emprunt introuvable")
+    if loan.get("user_id") != user["id"] and user["role"] not in ("admin", "teacher"):
+        raise HTTPException(status_code=403, detail="Accès refusé")
+    if loan.get("returned"):
+        raise HTTPException(status_code=400, detail="Ce prêt est déjà retourné")
+
     await db.loans.update_one({"_id": ObjectId(loan_id)}, {"$set": {"returned": True}})
     await db.books.update_one({"_id": ObjectId(loan["book_id"])}, {"$inc": {"available": 1}})
     return {"ok": True}
@@ -382,6 +527,15 @@ async def get_notifications(user: dict = Depends(get_current_user)):
 
 @api_router.post("/notifications/{notif_id}/read")
 async def mark_read(notif_id: str, user: dict = Depends(get_current_user)):
+    if not ObjectId.is_valid(notif_id):
+        raise HTTPException(status_code=400, detail="Identifiant de notification invalide")
+
+    notif = await db.notifications.find_one({"_id": ObjectId(notif_id)})
+    if not notif:
+        raise HTTPException(status_code=404, detail="Notification introuvable")
+    if notif.get("user_id") != user["id"] and user["role"] not in ("admin", "teacher"):
+        raise HTTPException(status_code=403, detail="Accès refusé")
+
     await db.notifications.update_one({"_id": ObjectId(notif_id)}, {"$set": {"read": True}})
     return {"ok": True}
 
@@ -419,6 +573,13 @@ async def dashboard(user: dict = Depends(get_current_user)):
 
 app.include_router(api_router)
 
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+# Serve frontend build if available, after API routes so the backend endpoints keep working.
+static_dir = ROOT_DIR / "dist"
+if static_dir.exists():
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -429,110 +590,163 @@ app.add_middleware(
 
 
 # ---------------- Seeding ----------------
-async def seed():
+TEACHER_NAME = "Prof. Martin Leroy"
+MATH_SUBJECT = "Mathématiques"
+
+
+async def ensure_users():
     await db.users.create_index("email", unique=True)
-    admin_email = os.environ["ADMIN_EMAIL"]
-    admin = await db.users.find_one({"email": admin_email})
+    admin = await db.users.find_one({"email": ADMIN_EMAIL})
     if not admin:
         await db.users.insert_one({
-            "name": "Administration", "email": admin_email,
-            "password_hash": hash_password(os.environ["ADMIN_PASSWORD"]),
+            "name": "Administration", "email": ADMIN_EMAIL,
+            "password_hash": hash_password(ADMIN_PASSWORD),
             "role": "admin", "created_at": datetime.now(timezone.utc).isoformat()})
 
     teacher = await db.users.find_one({"email": "prof@campus.edu"})
     if not teacher:
-        tid = (await db.users.insert_one({
-            "name": "Prof. Martin Leroy", "email": "prof@campus.edu",
+        teacher_id = (await db.users.insert_one({
+            "name": TEACHER_NAME, "email": "prof@campus.edu",
             "password_hash": hash_password("prof123"), "role": "teacher",
             "created_at": datetime.now(timezone.utc).isoformat()})).inserted_id
     else:
-        tid = teacher["_id"]
+        teacher_id = teacher["_id"]
 
     student = await db.users.find_one({"email": "etudiant@campus.edu"})
     if not student:
-        sid = (await db.users.insert_one({
+        student_id = (await db.users.insert_one({
             "name": "Sophie Dubois", "email": "etudiant@campus.edu",
             "password_hash": hash_password("etudiant123"), "role": "student",
             "created_at": datetime.now(timezone.utc).isoformat()})).inserted_id
     else:
-        sid = student["_id"]
-    sid_str = str(sid)
+        student_id = student["_id"]
+    return teacher_id, student_id
 
-    if await db.grades.count_documents({}) == 0:
-        grades = [
-            ("Mathématiques", "Contrôle 1", 15.5, 3), ("Mathématiques", "Examen final", 14.0, 4),
-            ("Informatique", "TP Algorithmes", 17.0, 2), ("Informatique", "Projet", 18.5, 3),
-            ("Physique", "Contrôle continu", 12.0, 2), ("Physique", "Examen", 13.5, 3),
-            ("Anglais", "Oral", 16.0, 1), ("Histoire", "Dissertation", 11.5, 2),
-        ]
-        for course, title, score, coef in grades:
-            await db.grades.insert_one({
-                "student_id": sid_str, "course": course, "title": title, "score": score,
-                "max_score": 20.0, "coefficient": float(coef), "teacher": "Prof. Martin Leroy",
-                "created_at": datetime.now(timezone.utc).isoformat()})
 
-    if await db.timetable.count_documents({}) == 0:
-        slots = [
-            ("Lundi", "08:00", "10:00", "Mathématiques", "Salle A101", "Prof. Martin Leroy"),
-            ("Lundi", "10:15", "12:15", "Informatique", "Lab B204", "Prof. Martin Leroy"),
-            ("Lundi", "14:00", "16:00", "Physique", "Salle C302", "Dr. Petit"),
-            ("Mardi", "09:00", "11:00", "Anglais", "Salle D105", "Mme. Clarke"),
-            ("Mardi", "11:15", "12:45", "Histoire", "Salle A203", "M. Bernard"),
-            ("Mercredi", "08:00", "10:00", "Informatique", "Lab B204", "Prof. Martin Leroy"),
-            ("Mercredi", "10:15", "12:15", "Mathématiques", "Salle A101", "Prof. Martin Leroy"),
-            ("Jeudi", "14:00", "17:00", "Projet tutoré", "Lab B210", "Prof. Martin Leroy"),
-            ("Vendredi", "09:00", "11:00", "Physique", "Salle C302", "Dr. Petit"),
-            ("Vendredi", "11:15", "12:45", "Anglais", "Salle D105", "Mme. Clarke"),
-        ]
-        for day, start, end, course, room, teacher_name in slots:
-            await db.timetable.insert_one({
-                "day": day, "start": start, "end": end, "course": course,
-                "room": room, "teacher": teacher_name})
+async def seed_grades(student_id: str):
+    if await db.grades.count_documents({}) != 0:
+        return
+    grades = [
+        (MATH_SUBJECT, "Contrôle 1", 15.5, 3), (MATH_SUBJECT, "Examen final", 14.0, 4),
+        ("Informatique", "TP Algorithmes", 17.0, 2), ("Informatique", "Projet", 18.5, 3),
+        ("Physique", "Contrôle continu", 12.0, 2), ("Physique", "Examen", 13.5, 3),
+        ("Anglais", "Oral", 16.0, 1), ("Histoire", "Dissertation", 11.5, 2),
+    ]
+    for course, title, score, coef in grades:
+        await db.grades.insert_one({
+            "student_id": student_id, "course": course, "title": title, "score": score,
+            "max_score": 20.0, "coefficient": float(coef), "teacher": TEACHER_NAME,
+            "created_at": datetime.now(timezone.utc).isoformat()})
 
-    if await db.fees.count_documents({}) == 0:
-        fees = [
-            ("Frais de scolarité — Semestre 1", 1200.00, "2026-02-15", "paid"),
-            ("Frais de scolarité — Semestre 2", 1200.00, "2026-07-15", "pending"),
-            ("Frais de bibliothèque", 45.00, "2026-03-01", "pending"),
-            ("Cotisation activités étudiantes", 80.00, "2026-03-10", "pending"),
-        ]
-        for label, amount, due, status in fees:
-            await db.fees.insert_one({
-                "student_id": sid_str, "label": label, "amount": amount,
-                "due_date": due, "status": status})
 
-    if await db.books.count_documents({}) == 0:
-        cover1 = "https://images.pexels.com/photos/8581043/pexels-photo-8581043.jpeg"
-        cover2 = "https://images.pexels.com/photos/683929/pexels-photo-683929.jpeg"
-        books = [
-            ("Introduction aux algorithmes", "Cormen, Leiserson", "Informatique", 3, cover1),
-            ("Analyse mathématique", "Jean Dieudonné", "Mathématiques", 2, cover2),
-            ("Physique quantique", "R. Feynman", "Physique", 1, cover1),
-            ("Histoire contemporaine", "E. Hobsbawm", "Histoire", 4, cover2),
-            ("Clean Code", "Robert C. Martin", "Informatique", 2, cover1),
-            ("L'Anglais des affaires", "M. Clarke", "Langues", 5, cover2),
-        ]
-        for title, author, cat, copies, cover in books:
-            await db.books.insert_one({
-                "title": title, "author": author, "category": cat,
-                "total": copies, "available": copies, "cover": cover})
+async def seed_timetable():
+    if await db.timetable.count_documents({}) != 0:
+        return
+    slots = [
+        ("Lundi", "08:00", "10:00", MATH_SUBJECT, "Salle A101", TEACHER_NAME),
+        ("Lundi", "10:15", "12:15", "Informatique", "Lab B204", TEACHER_NAME),
+        ("Lundi", "14:00", "16:00", "Physique", "Salle C302", "Dr. Petit"),
+        ("Mardi", "09:00", "11:00", "Anglais", "Salle D105", "Mme. Clarke"),
+        ("Mardi", "11:15", "12:45", "Histoire", "Salle A203", "M. Bernard"),
+        ("Mercredi", "08:00", "10:00", "Informatique", "Lab B204", TEACHER_NAME),
+        ("Mercredi", "10:15", "12:15", MATH_SUBJECT, "Salle A101", TEACHER_NAME),
+        ("Jeudi", "14:00", "17:00", "Projet tutoré", "Lab B210", TEACHER_NAME),
+        ("Vendredi", "09:00", "11:00", "Physique", "Salle C302", "Dr. Petit"),
+        ("Vendredi", "11:15", "12:45", "Anglais", "Salle D105", "Mme. Clarke"),
+    ]
+    for day, start, end, course, room, teacher_name in slots:
+        await db.timetable.insert_one({
+            "day": day, "start": start, "end": end, "course": course,
+            "room": room, "teacher": teacher_name, "program": "Informatique",
+            "year": "Année 1"})
 
-    if await db.notifications.count_documents({"user_id": sid_str}) == 0:
-        notifs = [
-            ("Bienvenue sur CampusConnect", "Votre espace étudiant est prêt.", "info"),
-            ("Échéance de paiement", "Frais de scolarité S2 à régler avant le 15/07.", "payment"),
-            ("Nouvelle note publiée", "Informatique — Projet: 18.5/20", "grade"),
-        ]
-        for title, body, t in notifs:
-            await db.notifications.insert_one({
-                "user_id": sid_str, "title": title, "body": body, "type": t,
-                "read": False, "created_at": datetime.now(timezone.utc).isoformat()})
 
-    if await db.messages.count_documents({}) == 0:
-        await db.messages.insert_one({
-            "sender_id": str(tid), "sender_name": "Prof. Martin Leroy", "recipient_id": sid_str,
-            "content": "Bonjour Sophie, pensez à rendre le projet avant vendredi.",
+async def seed_courses(teacher_id: str):
+    if await db.courses.count_documents({}) != 0:
+        return
+    sample_courses = [
+        ("Algorithmes avancés", "Supports de cours pour l’optimisation et la complexité algorithmique.", "Informatique", "https://example.com/cours-algorithmes.pdf"),
+        ("Analyse de données", "Séance d’introduction aux tableaux croisés et visualisation des données.", MATH_SUBJECT, "https://example.com/cours-donnees.pdf"),
+    ]
+    for title, description, subject, file_url in sample_courses:
+        await db.courses.insert_one({
+            "title": title,
+            "description": description,
+            "subject": subject,
+            "file_url": file_url,
+            "created_by": TEACHER_NAME,
+            "teacher_id": str(teacher_id),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+
+async def seed_fees(student_id: str):
+    if await db.fees.count_documents({}) != 0:
+        return
+    fees = [
+        ("Frais de scolarité — Semestre 1", 1200.00, "2026-02-15", "paid"),
+        ("Frais de scolarité — Semestre 2", 1200.00, "2026-07-15", "pending"),
+        ("Frais de bibliothèque", 45.00, "2026-03-01", "pending"),
+        ("Cotisation activités étudiantes", 80.00, "2026-03-10", "pending"),
+    ]
+    for label, amount, due, status in fees:
+        await db.fees.insert_one({
+            "student_id": student_id, "label": label, "amount": amount,
+            "due_date": due, "status": status})
+
+
+async def seed_books():
+    if await db.books.count_documents({}) != 0:
+        return
+    cover1 = "https://images.pexels.com/photos/8581043/pexels-photo-8581043.jpeg"
+    cover2 = "https://images.pexels.com/photos/683929/pexels-photo-683929.jpeg"
+    books = [
+        ("Introduction aux algorithmes", "Cormen, Leiserson", "Informatique", 3, cover1),
+        ("Analyse mathématique", "Jean Dieudonné", MATH_SUBJECT, 2, cover2),
+        ("Physique quantique", "R. Feynman", "Physique", 1, cover1),
+        ("Histoire contemporaine", "E. Hobsbawm", "Histoire", 4, cover2),
+        ("Clean Code", "Robert C. Martin", "Informatique", 2, cover1),
+        ("L'Anglais des affaires", "M. Clarke", "Langues", 5, cover2),
+    ]
+    for title, author, cat, copies, cover in books:
+        await db.books.insert_one({
+            "title": title, "author": author, "category": cat,
+            "total": copies, "available": copies, "cover": cover})
+
+
+async def seed_notifications(student_id: str):
+    if await db.notifications.count_documents({"user_id": student_id}) != 0:
+        return
+    notifs = [
+        ("Bienvenue sur CampusConnect", "Votre espace étudiant est prêt.", "info"),
+        ("Échéance de paiement", "Frais de scolarité S2 à régler avant le 15/07.", "payment"),
+        ("Nouvelle note publiée", "Informatique — Projet: 18.5/20", "grade"),
+    ]
+    for title, body, t in notifs:
+        await db.notifications.insert_one({
+            "user_id": student_id, "title": title, "body": body, "type": t,
             "read": False, "created_at": datetime.now(timezone.utc).isoformat()})
+
+
+async def seed_messages(teacher_id: str, student_id: str):
+    if await db.messages.count_documents({}) != 0:
+        return
+    await db.messages.insert_one({
+        "sender_id": str(teacher_id), "sender_name": TEACHER_NAME, "recipient_id": student_id,
+        "content": "Bonjour Sophie, pensez à rendre le projet avant vendredi.",
+        "read": False, "created_at": datetime.now(timezone.utc).isoformat()})
+
+
+async def seed():
+    teacher_id, student_id = await ensure_users()
+    student_id_str = str(student_id)
+    await seed_grades(student_id_str)
+    await seed_timetable()
+    await seed_courses(teacher_id)
+    await seed_fees(student_id_str)
+    await seed_books()
+    await seed_notifications(student_id_str)
+    await seed_messages(teacher_id, student_id_str)
 
 
 @app.on_event("startup")

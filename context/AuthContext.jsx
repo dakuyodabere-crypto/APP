@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import api from "@/lib/api";
 
 const AuthContext = createContext(null);
@@ -13,11 +13,13 @@ export function AuthProvider({ children }) {
       setLoading(false);
       return;
     }
+
     api
       .get("/auth/me")
       .then((res) => setUser(res.data))
       .catch(() => {
         localStorage.removeItem("token");
+        setUser(null);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -30,20 +32,29 @@ export function AuthProvider({ children }) {
 
   const register = async (payload) => {
     const res = await api.post("/auth/register", payload);
-    localStorage.setItem("token", res.data.token);
-    setUser(res.data.user);
+    if (res.data?.token) {
+      localStorage.setItem("token", res.data.token);
+    }
+    setUser(res.data?.user ?? null);
   };
 
   const logout = async () => {
     try {
       await api.post("/auth/logout");
-    } catch (e) {}
+    } catch (error) {
+      console.warn("Logout request failed, continuing anyway.", error);
+    }
     localStorage.removeItem("token");
     setUser(null);
   };
 
+  const value = useMemo(
+    () => ({ user, loading, login, register, logout }),
+    [user, loading],
+  );
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
