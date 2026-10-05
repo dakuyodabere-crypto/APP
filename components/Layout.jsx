@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, GraduationCap, CalendarDays, CreditCard, BookOpen,
-  MessagesSquare, Bell, LogOut, Menu, GraduationCap as Logo,
+  MessagesSquare, Bell, LogOut, Menu, GraduationCap as Logo, LibraryBig, ShieldCheck,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import api from "@/lib/api";
@@ -13,10 +13,11 @@ const NAV = [
   { to: "/notes", label: "Notes", icon: GraduationCap, testid: "nav-grades" },
   { to: "/emploi-du-temps", label: "Emploi du temps", icon: CalendarDays, testid: "nav-timetable" },
   { to: "/paiements", label: "Paiements", icon: CreditCard, testid: "nav-payments" },
-  { to: "/cours", label: "Cours", icon: BookOpen, testid: "nav-courses" },
   { to: "/bibliotheque", label: "Bibliothèque", icon: BookOpen, testid: "nav-library" },
+  { to: "/cours", label: "Cours", icon: LibraryBig, testid: "nav-courses", roles: ["student", "teacher", "admin"] },
   { to: "/messagerie", label: "Messagerie", icon: MessagesSquare, testid: "nav-messaging" },
   { to: "/notifications", label: "Notifications", icon: Bell, testid: "nav-notifications" },
+  { to: "/administration", label: "Administration", icon: ShieldCheck, testid: "nav-administration", roles: ["admin"] },
 ];
 
 const ROLE_LABEL = { student: "Étudiant", teacher: "Enseignant", admin: "Administration" };
@@ -51,7 +52,7 @@ export default function Layout({ children }) {
           </span>
         </div>
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-          {NAV.map((item) => {
+          {NAV.filter((item) => !item.roles || item.roles.includes(user?.role)).map((item) => {
             const Icon = item.icon;
             return (
               <NavLink

@@ -20,6 +20,7 @@ export default function Courses() {
   const [dragActive, setDragActive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [previewCourseId, setPreviewCourseId] = useState(null);
+  const [search, setSearch] = useState("");
 
   const load = () => {
     api.get("/courses").then((res) => setCourses(res.data)).catch(() => {});
@@ -28,6 +29,13 @@ export default function Courses() {
   useEffect(() => {
     load();
   }, []);
+
+  const filteredCourses = courses.filter((course) => {
+    const query = search.trim().toLowerCase();
+    if (!query) return true;
+    return [course.title, course.subject, course.description, course.created_by]
+      .some((value) => `${value || ""}`.toLowerCase().includes(query));
+  });
 
   const handleFileSelect = (file) => {
     if (file) {
@@ -138,7 +146,7 @@ export default function Courses() {
                 >
                   <input
                     type="file"
-                    accept=".pdf,.doc,.docx,.ppt,.pptx,.zip,.png,.jpg,.jpeg,.gif,.webp,.txt"
+                    accept=".pdf,.docx,.png,.jpg,.jpeg"
                     onChange={(e) => handleFileSelect(e.target.files?.[0] || null)}
                     className="sr-only"
                     id="course-file-upload"
@@ -146,7 +154,7 @@ export default function Courses() {
                   <label htmlFor="course-file-upload" className="flex cursor-pointer flex-col items-center gap-2">
                     <UploadCloud className="h-6 w-6 text-[#002FA7]" />
                     <span className="text-sm font-medium text-zinc-700">Glissez-déposez un fichier ou cliquez pour parcourir</span>
-                    <span className="text-xs text-zinc-500">PDF, DOCX, PPT, ZIP, images…</span>
+                    <span className="text-xs text-zinc-500">PDF, DOCX ou images JPG/PNG, 10 Mo maximum</span>
                   </label>
                 </div>
                 {selectedFile && (
@@ -175,9 +183,22 @@ export default function Courses() {
       )}
 
       <div>
-        <h2 className="font-heading text-xl font-semibold text-zinc-900">Liste des cours disponibles</h2>
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <h2 className="font-heading text-xl font-semibold text-zinc-900">Liste des cours disponibles</h2>
+          <div>
+            <label htmlFor="course-search" className="sr-only">Rechercher un cours</label>
+            <input
+              id="course-search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Rechercher un cours…"
+              className="w-full min-w-[240px] rounded-md border border-zinc-200 px-3 py-2 text-sm"
+              data-testid="course-search"
+            />
+          </div>
+        </div>
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          {courses.map((course) => (
+          {filteredCourses.map((course) => (
             <div key={course.id} className="bg-white border border-zinc-200 rounded-lg p-5">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -231,6 +252,7 @@ export default function Courses() {
               )}
             </div>
           ))}
+          {filteredCourses.length === 0 && <p className="text-zinc-400">Aucun cours correspondant.</p>}
         </div>
       </div>
     </div>

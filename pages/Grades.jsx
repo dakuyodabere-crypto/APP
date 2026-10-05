@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import api from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Plus } from "lucide-react";
+import { Download, FileText, Plus } from "lucide-react";
 
 function gradeColor(s, max) {
   const v = (s / max) * 20;
@@ -72,17 +72,29 @@ export default function Grades() {
   const { user } = useAuth();
   const [grades, setGrades] = useState([]);
   const [students, setStudents] = useState([]);
+  const [selectedStudent, setSelectedStudent] = useState("");
+  const [page, setPage] = useState(1);
   const [open, setOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [form, setForm] = useState({ student_id: "", course: "", title: "", score: "", coefficient: "1" });
 
   const isTeacher = user?.role !== "student";
 
-  const load = () => api.get("/grades").then((res) => setGrades(res.data)).catch(() => {});
+  const load = (studentId = selectedStudent, currentPage = page) =>
+    api.get("/grades", {
+      params: { ...(studentId ? { student_id: studentId } : {}), page: currentPage, page_size: 10 },
+    })
+      .then((res) => setGrades(res.data))
+      .catch(() => {});
 
   useEffect(() => {
-    load();
-    if (isTeacher) api.get("/contacts").then((res) => setStudents(res.data.filter((c) => c.role === "student"))).catch(() => {});
-  }, []);
+    load(selectedStudent, page);
+    if (isTeacher) {
+      api.get("/contacts")
+        .then((res) => setStudents(res.data.filter((c) => c.role === "student")))
+        .catch(() => {});
+    }
+  }, [selectedStudent, isTeacher, page]);
 
   const submit = async () => {
     try {
@@ -100,9 +112,64 @@ export default function Grades() {
     }
   };
 
+  const exportGrades = async (format = "csv") => {
+    setExporting(true);
+    try {
+      const response = await api.get(format === "pdf" ? "/grades/export.pdf" : "/grades/export", {
+        params: selectedStudent ? { student_id: selectedStudent } : undefined,
+        responseType: "blob",
+      });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `notes.${format}`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Export ${format.toUpperCase()} téléchargé`);
+    } catch (error) {
+      console.error("Failed to export grades", error);
+      toast.error("Erreur lors de l'export");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const chartData = [...grades].reverse().map((g, i) => ({
     name: g.title.slice(0, 10), note: Number(((g.score / g.max_score) * 20).toFixed(1)),
   }));
+
+  const summary = useMemo(() => {
+    if (!grades.length) {
+      return { average: 0, bestSubject: "—", subjectAverages: [], totalNotes: 0 };
+    }
+
+    const normalized = grades.map((g) => ({
+      ...g,
+      normalizedScore: Number(((g.score / g.max_score) * 20).toFixed(1)),
+    }));
+
+    const totalCoefficient = normalized.reduce((sum, g) => sum + g.coefficient, 0);
+    const average = normalized.reduce((sum, g) => sum + g.normalizedScore * g.coefficient, 0) / totalCoefficient;
+    const subjectAverages = Object.entries(
+      normalized.reduce((acc, g) => {
+        const current = acc[g.course] ?? { total: 0, count: 0 };
+        current.total += g.normalizedScore;
+        current.count += 1;
+        acc[g.course] = current;
+        return acc;
+      }, {})
+    ).map(([course, info]) => ({ course, average: Number((info.total / info.count).toFixed(1)) }))
+      .sort((a, b) => b.average - a.average);
+
+    const bestSubject = subjectAverages[0]?.course ?? "—";
+
+    return {
+      average: Number(average.toFixed(1)),
+      bestSubject,
+      subjectAverages,
+      totalNotes: normalized.length,
+    };
+  }, [grades]);
 
   return (
     <div data-testid="grades-page">
@@ -154,34 +221,127 @@ export default function Grades() {
         </div>
       )}
 
+      {isTeacher && (
+        <div className="grid gap-4 md:grid-cols-3 mt-6">
+          <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-sm">
+            <p className="text-xs uppercase tracking-[0.15em] text-zinc-500">Moyenne générale</p>
+            <p className="mt-2 text-2xl font-semibold text-[#002FA7]">{summary.average.toFixed(1)}/20</p>
+          </div>
+          <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-sm">
+            <p className="text-xs uppercase tracking-[0.15em] text-zinc-500">Nombre de notes</p>
+            <p className="mt-2 text-2xl font-semibold text-zinc-900">{summary.totalNotes}</p>
+          </div>
+          <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-sm">
+            <p className="text-xs uppercase tracking-[0.15em] text-zinc-500">Matière la plus forte</p>
+            <p className="mt-2 text-lg font-semibold text-emerald-700">{summary.bestSubject}</p>
+          </div>
+        </div>
+      )}
+
+      {isTeacher && summary.subjectAverages.length > 0 && (
+        <div className="bg-white border border-zinc-200 rounded-xl mt-4 p-4 shadow-sm">
+          <h3 className="font-heading text-lg font-medium text-zinc-800">Vue par matière</h3>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {summary.subjectAverages.map((item) => (
+              <span key={item.course} className="rounded-full bg-[#002FA7]/10 px-3 py-1 text-sm font-medium text-[#002FA7]">
+                {item.course} · {item.average}/20
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="bg-white border border-zinc-200 rounded-xl mt-6 overflow-hidden shadow-sm">
-        <table className="w-full text-sm" data-testid="grades-table">
+        {isTeacher && (
+          <div className="flex items-center justify-between gap-3 border-b border-zinc-200 px-6 py-4 bg-zinc-50">
+            <div>
+              <Label className="text-xs uppercase tracking-[0.15em] text-zinc-500">Étudiant</Label>
+              <select
+                className="mt-1.5 w-full min-w-[220px] h-9 px-3 rounded-md border border-zinc-200 text-sm bg-white"
+                value={selectedStudent}
+                onChange={(e) => {
+                  setSelectedStudent(e.target.value);
+                  setPage(1);
+                }}
+                data-testid="grade-filter-student"
+              >
+                <option value="">Tous les étudiants</option>
+                {students.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={exportGrades}
+              disabled={exporting}
+              className="rounded-md"
+              data-testid="export-grades-button"
+              title="Exporter les notes en CSV"
+            >
+              <Download className="w-4 h-4" />
+              {exporting ? "Export…" : "Exporter CSV"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => exportGrades("pdf")}
+              disabled={exporting}
+              className="rounded-md"
+              data-testid="export-grades-pdf-button"
+              title="Exporter les notes en PDF"
+            >
+              <FileText className="w-4 h-4" />
+              PDF
+            </Button>
+          </div>
+        )}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-sm" data-testid="grades-table">
           <thead>
             <tr className="border-b border-zinc-200 text-left text-xs uppercase tracking-[0.15em] text-zinc-500 bg-zinc-50">
+              {isTeacher && <th className="px-6 py-3 font-semibold">Étudiant</th>}
               <th className="px-6 py-3 font-semibold">Matière</th>
               <th className="px-6 py-3 font-semibold">Évaluation</th>
+              <th className="px-6 py-3 font-semibold">Professeur</th>
               <th className="px-6 py-3 font-semibold">Coef.</th>
               <th className="px-6 py-3 font-semibold text-right">Note</th>
             </tr>
           </thead>
           <tbody>
             {grades.length === 0 && (
-              <tr><td colSpan="4" className="px-6 py-10 text-center text-zinc-400">Aucune note disponible</td></tr>
+              <tr><td colSpan={isTeacher ? 6 : 5} className="px-6 py-10 text-center text-zinc-400">Aucune note disponible</td></tr>
             )}
-            {grades.map((g) => (
-              <tr key={g.id} className="border-b border-zinc-100 hover:bg-zinc-50 transition-colors" data-testid="grade-row">
-                <td className="px-6 py-4 font-medium text-zinc-900">{g.course}</td>
-                <td className="px-6 py-4 text-zinc-600">{g.title}</td>
-                <td className="px-6 py-4 text-zinc-600">{g.coefficient}</td>
-                <td className="px-6 py-4 text-right">
-                  <span className={`inline-flex items-center justify-center min-w-[72px] px-2.5 py-1 rounded-full text-sm font-semibold ${gradeColor(g.score, g.max_score)}`}>
-                    {g.score}/{g.max_score}
-                  </span>
-                </td>
-              </tr>
-            ))}
+            {grades.map((g) => {
+              const studentName = students.find((s) => s.id === g.student_id)?.name ?? g.student_id;
+              return (
+                <tr key={g.id} className="border-b border-zinc-100 hover:bg-zinc-50 transition-colors" data-testid="grade-row">
+                  {isTeacher && <td className="px-6 py-4 font-medium text-zinc-900">{studentName}</td>}
+                  <td className="px-6 py-4 font-medium text-zinc-900">{g.course}</td>
+                  <td className="px-6 py-4 text-zinc-600">{g.title}</td>
+                  <td className="px-6 py-4 text-zinc-600">{g.teacher || "—"}</td>
+                  <td className="px-6 py-4 text-zinc-600">{g.coefficient}</td>
+                  <td className="px-6 py-4 text-right">
+                    <span className={`inline-flex items-center justify-center min-w-[72px] px-2.5 py-1 rounded-full text-sm font-semibold ${gradeColor(g.score, g.max_score)}`}>
+                      {g.score}/{g.max_score}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
-        </table>
+          </table>
+        </div>
+        {grades.length === 10 && (
+          <div className="flex items-center justify-between border-t border-zinc-200 px-6 py-3 text-sm">
+            <Button type="button" variant="outline" disabled={page === 1} onClick={() => setPage((current) => current - 1)} className="rounded-md">
+              Page précédente
+            </Button>
+            <span className="text-zinc-500">Page {page}</span>
+            <Button type="button" variant="outline" onClick={() => setPage((current) => current + 1)} className="rounded-md">
+              Page suivante
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -15,37 +15,33 @@ const Library = lazy(() => import("@/pages/Library"));
 const Messaging = lazy(() => import("@/pages/Messaging"));
 const Notifications = lazy(() => import("@/pages/Notifications"));
 const Courses = lazy(() => import("@/pages/Courses"));
+const Administration = lazy(() => import("@/pages/Administration"));
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
-
-  if (loading) {
+  if (loading)
     return (
       <div className="min-h-screen flex items-center justify-center text-zinc-500" data-testid="app-loading">
         Chargement…
       </div>
     );
-  }
-
-  if (!user) {
-    return <Navigate to="/login" replace />;
-  }
-
+  if (!user) return <Navigate to="/login" replace />;
   return <Layout>{children}</Layout>;
 }
 
 function PublicOnly({ children }) {
   const { user, loading } = useAuth();
-
-  if (loading) {
-    return null;
-  }
-
-  if (user) {
-    return <Navigate to="/" replace />;
-  }
-
+  if (loading) return null;
+  if (user) return <Navigate to="/" replace />;
   return children;
+}
+
+function RoleProtected({ roles, children }) {
+  const { user, loading } = useAuth();
+  if (loading) return null;
+  if (!user) return <Navigate to="/login" replace />;
+  if (!roles.includes(user.role)) return <Navigate to="/" replace />;
+  return <Layout>{children}</Layout>;
 }
 
 function App() {
@@ -60,10 +56,11 @@ function App() {
               <Route path="/notes" element={<Protected><Grades /></Protected>} />
               <Route path="/emploi-du-temps" element={<Protected><Timetable /></Protected>} />
               <Route path="/paiements" element={<Protected><Payments /></Protected>} />
-              <Route path="/cours" element={<Protected><Courses /></Protected>} />
               <Route path="/bibliotheque" element={<Protected><Library /></Protected>} />
+              <Route path="/cours" element={<RoleProtected roles={["student", "teacher", "admin"]}><Courses /></RoleProtected>} />
               <Route path="/messagerie" element={<Protected><Messaging /></Protected>} />
               <Route path="/notifications" element={<Protected><Notifications /></Protected>} />
+              <Route path="/administration" element={<RoleProtected roles={["admin"]}><Administration /></RoleProtected>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>
@@ -79,6 +76,11 @@ Protected.propTypes = {
 };
 
 PublicOnly.propTypes = {
+  children: PropTypes.node,
+};
+
+RoleProtected.propTypes = {
+  roles: PropTypes.arrayOf(PropTypes.string).isRequired,
   children: PropTypes.node,
 };
 
